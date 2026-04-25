@@ -1,0 +1,38 @@
+title: Sam Wenke
+description: Notes on RL, board games, and tools.
+url: "https://wenkesj.github.io"
+baseurl: ""
+author: Sam Wenke
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+  syntax_highlighter: rouge
+
+permalink: /:year/:month/:day/:title/
+
+# Toggle math support per-post via `math: true` in front matter; the
+# default layout loads MathJax v3 only when this flag is on.
+math: true
+
+defaults:
+  - scope:
+      path: ""
+      type: posts
+    values:
+      layout: post
+
+# Plugins available on GitHub Pages — see
+# https://pages.github.com/versions/ for the supported list.
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+  - .bundle
+  - .jekyll-cache
+  - README.md
