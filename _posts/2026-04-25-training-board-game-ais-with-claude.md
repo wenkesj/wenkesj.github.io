@@ -1,147 +1,117 @@
 ---
 layout: post
-title: "An RL project I'd been deferring for years"
+title: "Games and RL"
 date: 2026-04-25
 math: true
 ---
 
-Games have been a hobby of mine for as long as I can remember, board
-games especially. Reinforcement learning has shown up across a few of
-my jobs (never as the main thing, always around the edges), but the
-combination of policy search, multi-agent dynamics, and game theory has
-been the part of ML I've been most personally drawn to. A
-[paper on generalization in RL](https://arxiv.org/abs/1907.02050) is
-where I last got to scratch the itch of sharing my own experiments and
-what I find interesting about this corner of ML; this post is, in
-spirit, the next round of that. The two RL projects I was most excited
-to be a part of: off-policy training applied to the John Deere
-harvester, and an earlier line of work using PPO on top of RNN forward
-models, where simulation was fused with uncertainty estimates to produce
-high-quality policies on the Quanser Qube via human-in-the-loop
-exploration with minimal human interaction.
-I followed AlphaGo, AlphaStar, OpenAI Five and the rest of the
-DeepMind / early-OpenAI run when those papers landed, and kept a quiet
-running list of experiments I'd want to try if I ever had the time to
-wire up the substrate myself.
+Games and reinforcement learning have been a hobby of mine for as long as I can remember, 
+board games especially. Early on in my career, I had the opportunity to apply
+reinforcement learning in settings where research and engineering were pushing
+Deep Learning to it's practical limits: on hardware and real world problems.
+There has been many highs in my career outside of reinforcement learning since then, 
+but it's always stuck around _as a hobby and interest_!
 
-The substrate was always the wall. A clean game engine, a serializable
-state, an action vocabulary, a server that can drive AI play, a UI to
-actually see what the policy is doing. That's months of plumbing before
-a single training step. With Claude available as a co-engineer to
-execute the tedious half of that work alongside me, the wall got low
-enough to climb. The pretext became "build a framework where I can play
-the board games I like." The actual goal was to put my hands on every
-interesting decision in modern RL (reward shaping, exploration,
-opponent sampling, equilibrium solvers), using games I actually care
-about as the testbed.
-
-This is the story of how that played out, with diagrams.
+This blog post series is really about board games and agents.
+It all started because I was so interested in learning how general agents could help me 
+learn and try things that I never would have been able to try in a such a short period of time.
 
 ---
 
-## A short primer (for everyone)
+## A short primer
 
-If you've never trained a neural network, read a game-theory textbook, or
-worked through [Sutton & Barto's *Reinforcement Learning: An
-Introduction*](http://incompleteideas.net/book/the-book-2nd.html), the
-rest of this post will still mostly make sense if you read this one
-section.
+I never took classes or was taught RL during school, so I had to look to the internet for resources.
+The two books I could say that I learned the most from and where I found my niche and passion for these things, were
+[Sutton & Barto's *Reinforcement Learning: An
+Introduction*](http://incompleteideas.net/book/the-book-2nd.html) and 
+[Giacomo Bonanno's *Game Theory*](https://faculty.econ.ucdavis.edu/faculty/bonanno/PDF/GT_book.pdf).
 
-**Reinforcement learning (RL).** A neural network plays a game over and
-over. After every move it receives a tiny reward (positive if it scored
-points, negative if it didn't) and at the end of the game a big reward
-(positive for winning, negative for losing). Over many games, the network
-adjusts its weights so it picks the moves that earned it the most reward.
-The loop is: see state, pick action, receive reward, learn.
+You don't have to read these books to understand what this post is about, so here are some really high level,
+defined terms (as they are applicable here to **Games**).
+
+**Reinforcement learning (RL).** a policy plays a game over and
+over. After every move it receives a tiny reward (positive or negative) and 
+at the end of the game a big reward (positive for winning, negative for losing). 
+Over many games, the RL algorithm we use adjusts the policy so it picks the moves 
+that earned it the most reward. The loop is: see game _state_, pick _action_, receive _reward_, _learn_.
 
 **Policy.** The "brain" of the agent. Mathematically, a function
 $\pi_\theta(a \mid s)$: given a state $s$, return a probability over each
-legal action $a$. The network's job is to learn $\theta$ (its weights) so
+legal action $a$. The functions job is to learn so
 this distribution puts high probability on good moves.
 
-**Value function.** A second head on the same network that estimates "how
-much total reward do I expect to get from this state on?" It's not used to
-pick actions directly; it's a sidekick that tells the policy gradient how
-much better-than-average a particular move was. Written $\hat V(s)$.
+**Value function.** A sidekick that tells the RL algorithm how
+much better a particular move was. Mathemetically, a function $\hat V(s)$.
 
-**PPO.** A specific recipe for updating the policy. The recipe's slogan is:
-*don't take steps that are too big.* In RL, gigantic policy updates can
-collapse the policy entirely (it forgets how to play). PPO clips the size
-of each update. The objective is
+**Proximal Policy Optimization (PPO).** A specific RL algorithm for updating the policy and value. 
+The recipe's slogan is: *don't make changes to the policy that are too big.* 
+In RL, gigantic policy updates can actually make it so the policy _forgets_ how to play. 
+PPO essentially just _clips_ the size of each update.
 
-$$
-L^{\text{CLIP}}(\theta) = \mathbb{E}_t \left[ \min\left( r_t(\theta) A_t,\ \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) A_t \right) \right]
-$$
-
-where $r_t(\theta) = \pi_\theta(a_t \mid s_t) / \pi_{\theta_{\text{old}}}(a_t \mid s_t)$
-is how much more likely the new policy makes the action vs the old one,
-and $A_t$ is the advantage (how much better the action looked than what
-the value head expected). The clip stops $r_t$ from drifting outside
-$[1-\epsilon, 1+\epsilon]$.
-
-**Behavior cloning (BC, also called supervised fine-tuning, SFT).** Skip
-the trial-and-error. Show the network a stack of human (or expert)
-demonstrations and train it the same way you'd train an image classifier
-or an LLM: "given this input, output a probability distribution that puts
-maximum weight on the right answer." It's the same cross-entropy loss
-in all three cases. An image classifier sees pixels and predicts the
-label "cat"; an LLM sees prior tokens and predicts the next token; BC
-sees the game state and predicts the action the human took. The result
-is a policy that imitates the demonstrator. Useful as a starting point,
+**Behavior cloning.** The same term you keep hearing with LLMs: Supervised Fine Tuning (SFT). 
+Train a policy to reproduce some ouput given an input. The same way you'd train a cat OR dog image classifier
+or an LLM: "given this input, output this probability." An image classifier sees pixels and predicts the
+label "cat"; an LLM sees prior tokens (sometimes _pixels_, as well!) and predicts the next token; BC
+sees the game state and predicts the action the demonstrator provides. The result
+is a policy that ~imitates the demonstrator. Useful as a starting point,
 but capped at the demonstrator's skill.
 
-**Nash equilibrium and PSRO.** In a competitive 2-player game, a "Nash
-equilibrium" is a (possibly mixed) strategy that you can't do better than
-*if your opponent plays optimally too*. PSRO (Policy-Space Response
-Oracles) builds Nash mixtures iteratively: keep a *pool* of policies, find
-the best counter-policy ("best response") to the current Nash mixture of
-the pool, add it to the pool, recompute the Nash mixture over the
-expanded pool. Repeat. The hope is that the pool converges to something
-no opponent can exploit.
+**Nash equilibrium.** In a competitive 2-player game, a "Nash
+equilibrium" is a policy (or a *roster* of policies) that you just can't do better than
+*if your opponent plays optimally, too*. The best teams playing against each other.
 
-**Payoff matrix.** A square table where entry $(i, j)$ is the win-rate of
-policy $i$ playing as p1 against policy $j$ as p2. The Nash mixture is
-computed from this table. We'll see ours later.
+**Policy-Space Response Oracles (PSRO)**, builds these policies for the Nash equilibrium iteratively: 
+keep a *roster* of policies, find the best counter-policy ("best response") to the current roster, add it, then recompute the next roster. Repeat. The hope is that the roster converges to something no opponent can repeatedly win against.
 
-OK, primer done.
+**Payoff matrix.** A matrix where each row and column ($(i, j)$) is the win-rate of
+policy $i$ playing as Player 1 against policy $j$ as Player 2.
 
 ---
 
-## Starting from the substrate
+## Vibes
 
-The first thing I asked Claude to help me build was infrastructure: a
-TypeScript engine encoding the rules of UNO (plus a few other games
-I'll come back to in future posts), a Node server exposing it over
-REST + WebSocket, and a React client to drive it all from a browser.
-The rest of *this* post is going to stick to UNO; the more interesting
-games are a story for another time.
+I have a desktop with a GPU at home that I use only for my personal hobbies 
+and a personal Claude Max subscription. I have a Claude Code 
+session open on a terminal on my desktop with `/remote-control` enabled, 
+and Claude on my phone which allows me to chat with the session on my desktop.
+There wasn't much else involved in setting this up, other than the free tier `ngrok` 
+with `OAuth` for accessing the local desktop server through my phone.
+This project was entirely vibe-coded on some nights and weekends by Claude, 
+guided by me talking to it.
 
-This part is where Claude earned its keep early. I'd written one or two
-game engines from scratch before; the marginal cost of writing several
-more by hand would have killed the project. Instead I gave Claude
-rulebooks and asked it to produce engines in a consistent shape: pure
+The first thing I asked Claude to build was infrastructure: a
+TypeScript engine encoding the rules of games I know how to play, 
+(enjoy, and find interesting), a Node server exposing it over REST + WebSocket, 
+and a React client to drive it all from a browser.
+
+I gave Claude rulebooks and asked it to produce engines in a consistent shape: pure
 deterministic game definitions, a session manager, a primitive action
-API, a registry. We iterated a lot. Claude would hand me a first pass,
-I'd play through a session in the UI, find the place where some edge
-case broke or a deck didn't drain, and we'd fix it. The end result was
-a substrate where humans, scripts, or learned agents could all be just
+API, a registry. We iterated a lot to ensure that it got the rules correct and the UI made sense. 
+Claude would hand me a first pass, I'd play through a session in the UI, 
+find the place where some edge case broke and we'd fix it. 
+The end result was a substrate where humans, scripts, or learned agents could all be just
 another caller of the same API.
 
 ## The cold-start problem
 
-To play any of these games against an AI, you need an AI. The first one we
-wrote was the one we already knew how to write: greedy bots, sometimes
-wrapped in MCTS, hand-coded by Claude per game from the rule definitions.
-They could play through to terminal states. They were beatable but
-reasonable. They served as the cold-start opponent for everything that
-came later.
+To play any of these games against an AI, you need an AI. Learning games 
+from _scratch_ (pure entropy and chaos) can be incredibly hard and not really interesting to me. 
+The easiest thing to do, is give Claude the rules, and have it come up with a set of anchors: 
+greedy bots, sometimes wrapped in an intelligent search such as Monte Carlo Tree Search (MCTS), 
+or hand-coded by Claude per game from the rule definitions.
+They could play through to terminal states which was the most important. 
+They were sometimes beatable but reasonable (dependending on the complexity of the game). 
+They served as the cold-start opponent for everything.
 
-They were also intellectually unsatisfying. Greedy plays a one-step
-optimization on hand-rolled features; it never *learns* anything. It
-doesn't model the opponent. It doesn't model future state. It doesn't
-discover, for instance, that in 2-player UNO a Reverse acts as a Skip and
-should be saved for when the opponent is at one card. I wanted to see what
-a policy that actually adapts to the game's structure would look like:
+They were also intellectually unsatisfying to begin with. In this post, I purposefully don't experiment 
+to see if _Claude_ can iteratively come up with the best hard-coded AI's (or _even recreate this setup_!). 
+Although, that is interesting to the research community and I: the concept that the RL algorithm can 
+itself be a bag of coding LLMs: (e.g., [Code Space Response Oracles](https://arxiv.org/abs/2603.10098)). 
+That is for another blog post soon!
+
+The fixed policies don't model future state. They don't learn, for instance, 
+that in 2-player UNO a Reverse acts as a Skip and should be saved for when the opponent is at one card. 
+I wanted to see what a policy that actually adapts to the game's structure would look like:
 partly because I have an RL background and was curious to apply it on
 something non-toy, and partly because the games themselves only become
 *interesting* when the agent has to think more than one step ahead.
@@ -160,89 +130,39 @@ to zero on a single trajectory to confirm the model was capable of
 representing the policy at all. Then PPO, then training from scratch
 against greedy.
 
-### The architecture in more detail
+### Modeling
 
-**State.** Every game has its own `GameState` shape (UNO has hands,
-discard pile, current color; Catan has a hex map, settlements, dev
-cards). For the policy, we summarize the state into a fixed *schema*: a
-list of "modalities" with declared shapes. UNO's schema, for instance, has:
+This post focuses on four games: **UNO**, **Splendor**, **Backgammon**,
+and **Catan**. Each game gets its own trained agent 
+but they all go through the same modeling recipe: turn the raw
+game state into something a network can consume, ask the network to
+score the legal moves, and let RL update it from the engine's reward.
 
-- a 21-dim vector for the top discard card (5-color one-hot + 15-symbol
-  one-hot + value),
-- a 9-dim vector for shared state (current color, direction, pendingDraw,
-  drawn-this-turn flag, deck size),
-- an entity-list of up to 20 cards for the current player's hand,
-- an entity-list of up to 3 opponent summaries,
-- a scalar for the current player's score,
-- a time scalar for the turn count,
-- a categorical for "which player am I."
+**State.** Every game has its own state shape: UNO has hands and a
+discard pile, Splendor has gem piles and a card market, Backgammon has
+24 points and a bar, Catan has a hex map and settlements. For the
+network, we summarize each state into a fixed per-game *schema* (a
+list of structured "modalities": scalars, entity lists, categoricals,
+with declared shapes). The schema is what the network actually sees:
+scalars for things like turn count and hand size, entity lists for the
+cards or pieces on the board, categoricals for phase. Hidden information
+(other players' hands, the unflipped Frodo identity, etc.) is replaced
+by opponent *summaries* like hand sizes and scores, which keeps the
+agent learning a general policy rather than a clairvoyant one.
 
-**Observation.** The policy network sees only what the *acting player*
-would see. Hidden information (other players' hands) is replaced by
-opponent *summaries* (hand sizes, scores, said-uno flags). This is what
-keeps the network learning a general policy rather than a clairvoyant
-one.
+**Actions.** At decision time, the engine hands the network the list of
+currently-legal moves and asks it to score each one. The output is a
+probability distribution over only the legal indices (illegal moves
+never get any mass, so the network never has to learn "don't do that").
+Each move is featurized with its action type plus any parameters
+(which card, which vertex, which target color), and those features are
+combined with the state encoding to produce a per-move logit.
 
-**Action space.** Per game, every legal move from the engine. UNO has
-`play`, `draw`, `draw-stack`, `say-uno`, `challenge-wdf`, `pass`. Each
-move object also carries parameters (`cardId`, `chosenColor` for wilds).
-At decision time, the policy is given the list of currently-legal moves
-and asked to score each one. It outputs a distribution over those legal
-indices, never an illegal action. Concretely: each move is encoded into
-a vector $\mathbf{m}_i$, and the policy logit is
-
-$$
-\text{logit}_i = \text{MLP}\big(\,[\,h_{\text{state}}\,;\, h_{\text{move}_i}\,]\,\big)
-$$
-
-where $h_{\text{state}}$ is the pooled transformer encoding of the state
-and $h_{\text{move}_i}$ is a learned linear projection of the move
-features.
-
-> *Intuition:* the network reads the current state, then for each legal
-> move it answers a single question: "how good does this move look from
-> where we are?" The score for each move becomes a probability, and only
-> legal moves are even on the ballot. Illegal moves get zero mass
-> automatically; the network never has to learn "don't do that."
-
-**Network.** A small bidirectional transformer (3 layers, 128 dims,
-4 heads). Each modality is encoded into tokens, prepended with a CLS
-token, and run through the transformer. The CLS output is the state
-embedding. Two MLP heads on top: a policy head (scoring legal moves) and
-a value head (scalar).
-
-**Reward shaping.** Per step, the engine returns `deltaReward` (change in
-the acting player's score) and `terminalBonus` ($+1$ win, $-1$ loss, $0$
-draw or ongoing). We shape it as
-
-$$
-r_t = \frac{\Delta_t}{\text{scale}_g} + 2 \cdot b_t \cdot \mathbb{1}[\text{done}_t] - 0.001
-$$
-
-The per-game scale ($\text{scale}_g$) is chosen so the per-step magnitude
-sits in $[-1, 1]$ on average (UNO uses 200, Splendor uses 15). The
-$-0.001$ is a tiny step penalty discouraging stalling.
-
-**Advantage estimation (GAE).** We don't credit a move with the raw
-discounted return; we use Generalized Advantage Estimation, which trades
-bias against variance:
-
-$$
-\hat A_t = \sum_{l=0}^{\infty} (\gamma\lambda)^l \delta_{t+l}, \quad
-\delta_t = r_t + \gamma \hat V(s_{t+1}) - \hat V(s_t)
-$$
-
-with $\gamma = 0.99$ and $\lambda = 0.95$. This is what plugs into the
-PPO clipped objective above.
-
-> *Intuition:* don't credit a move just by "did I eventually win."
-> Credit it by how much *better the next state turned out than what the
-> value head expected*. Stack a string of small "pleasant surprises" or
-> "small disappointments" with a decay factor (so distant surprises
-> matter less than nearby ones), and you get a far smoother signal to
-> learn from than the raw end-of-game outcome alone. That smoother
-> signal is what GAE is: a way of asking "was this move better or worse
-> than predicted, on a sliding window?"
+**Reward.** The engine returns a small per-step delta whenever the
+acting player's score changes (a settlement built, a card bought, an
+opponent forced to draw) plus a terminal bonus on win or loss. We scale
+the deltas per game so the magnitudes are comparable across UNO and
+Catan, and that's what PPO consumes.
 
 The first time a from-scratch PPO policy beat greedy 70-30 on UNO was
 exciting in the way a benchmark number rarely is, because *I had just
@@ -251,262 +171,227 @@ moves it made to what greedy would have done. The verification loop
 collapsed: write code with Claude → train → click "AI Turn" in the
 browser → think about whether the move made sense → tweak.
 
-## PSRO and the plateau
+## PSRO
 
-Beating greedy isn't enough. A policy that beats greedy can still be wildly
-exploitable by a different policy the meta has never seen. PSRO is the
-loop that addresses this:
+Beating greedy isn't enough. A policy that beats greedy can still be
+wildly exploitable by a different policy the meta has never seen. PSRO
+addresses this: keep a roster of policies, train the best counter-policy
+("best response") to the current Nash mixture over the roster, add it
+back, recompute the mixture, repeat. The roster is meant to converge to
+a balanced lineup nobody can exploit by introducing yet another fighter.
 
-```
-pool = [greedy]
-meta = [1.0]
-for k in range(K):
-    new_BR = train_PPO(opponent ~ meta)
-    pool.append(new_BR)
-    payoff = evaluate_all_pairs(pool)
-    meta = nash_equilibrium(payoff)
-```
+The first 20-iter run plateaued. The Nash mix locked at iter 12 and the
+next eight iterations added zero new weight. That collapse was the
+trigger for everything that came next.
 
-The Nash mix tells you which policies in your pool are *necessary*. A
-policy with weight $0$ in the final Nash mix is one the equilibrium
-doesn't need; either it's redundant or it's strictly worse than other
-pool members.
+## Anchor pools, PFSP, and BC warm-start
 
-> *Intuition:* picture a roster of fighters. Each round you train the
-> *best counter* to the current "team" your roster fields, then add
-> them to the roster. After enough rounds, ideally, the team converges
-> to a balanced lineup that nobody can exploit by introducing yet
-> another fighter. The Nash mix is the lineup; weight zero means
-> "doesn't make the team."
+I asked Claude for a focused literature review on what the PSRO + deep-RL
+community does when the inner BR loop stops contributing. We boiled 
+down the research to three concrete changes I thought were most practical.
 
-This is where things got harder, and also where the human-in-the-loop
-verification got more important. PSRO has many moving parts. The inner
-PPO loop is short. The BR doesn't always converge. The Nash mix can
-collapse. And the only real way to know "did this learn?" is to play the
-policies. So I did. Multiple games against `iter_4_br`, `iter_5_br`,
-`iter_7_br`, reading their move-by-move behavior in the UI, noticing
-when a policy started using `challenge-wdf` (something none of the
-earlier iterations did), noticing when one used the symbol-match trick
-to switch colors, noticing when one mis-timed its WD4. Each game told me
-more than the payoff matrix did.
+**Anchor pools.** A fixed set of hand-coded heuristic opponents (per
+game) that always live in the pool alongside the trained best
+responses. Each anchor encodes a coherent style: in Catan, agents like
+`city_rush`, `settlement_sprawl`, `road_builder`, `port_specialist`,
+`hoarder`. PSRO's opponent sampler is forced to spend a minimum
+fraction of training time against every anchor via a sampling **floor**.
+The floor stops the BR from tunneling on a single style and forgetting
+how to beat the rest (AlphaStar's "main exploiters" trick). The
+practical impact: the difference between a Nash mix that locks at four
+policies after iter 12 and one that keeps adding policies through iter
+20.
 
-After about twelve PSRO iterations, the Nash mix locked. Iters 13 through
-20 added zero new weight to the meta. Same four policies, all eight more
-iterations. I called this "the plateau."
+**PFSP (prioritized fictitious self-play).** Within the anchor floor,
+each opponent *i* is sampled with weight proportional to its meta weight
+times $(1 - \text{wr}_i)^p$, where $\text{wr}_i$ is the BR's recent
+win-rate against that opponent. Every gradient step is biased toward
+the opponent the BR is currently *losing* to (the sparring partners
+that still have something to teach). Without PFSP, training rollouts
+fill up with easy wins that don't move the needle.
 
-![Nash mix size]({{ '/assets/nash_mix_size.png' | relative_url }})
+**Per-agent BC + TIES merge.** Behavior cloning is the bridge to PSRO's
+inner PPO. The basic move is the same one LLM trainers make: pretrain
+on demonstrations to put the policy in a sensible region of action
+space (SFT), then use RL to push past it (RFT). The wrinkle that
+worked best was *per-agent*: train one BC model per anchor archetype
+on its own trajectories, then merge the per-agent state-dicts via
+TIES. This preserves each archetype's distinctive behavior in the
+merged checkpoint instead of producing a bland average. That checkpoint
+becomes iter 0 of PSRO. It cuts the time the BR spends re-discovering
+the basics, and it gives the early-iter best responses a coherent
+starting style to refine instead of random noise to escape.
 
-> **The plateau** (grey line, baseline run): from iteration 12 onward, the
-> Nash mixture is exactly the same four policies. Eight iterations of
-> additional best-response training added nothing. The amber line is the
-> next experiment, getting ahead of the story; that one keeps adding
-> policies all the way to iteration 20.
+## What the policies learned
 
-## SFT then RFT
+The single thing that turned Claude's vibe into something I trusted was
+the **AI preview overlay** in the UI: when "Step" mode is on, every
+move the AI is about to make is annotated with the policy's full
+probability distribution and its value-head estimate. Watching those
+preferences change across iterations told me more than any payoff
+matrix did.
 
-Behavior cloning came in as the bridge. We built a recording layer into
-the engine, a dataset manager in the UI, a per-player action filter so you
-could selectively clone "winning seat" trajectories or "human-only" moves.
-The BC checkpoint became the warm-start init for PSRO's inner PPO, which
-I kept calling the SFT→RFT analogue because it really is the same move
-LLM trainers make: pretrain on demonstrations to put the policy in a
-sensible region of action space, then use RL to push past human ceiling.
+### UNO
 
-And exactly like LLMs, we hit the failure modes. The first attempt
-catastrophically degraded the BC-init policy because PPO's value-loss
-gradient was driving updates from a fresh-noisy critic. We added a
-value-only warmup phase, lower learning rate, smaller clip ratio, lower
-entropy coefficient, all of it grounded in the symptom: BC entropy was
-0.1 and we were trying to push it back up.
+![UNO AI preview]({{ '/assets/uploads/2026-05-06T14-17-11-888Z__IMG_0088.jpeg' | relative_url }})
 
-## Asking Claude for a literature review
+> Trained UNO policy at iter 20, mid-game. Discard is a Wild that was
+> set to Red; the network is holding `R↻` (Red Reverse), `R+2`, and
+> several other cards. The preview reads 100% on `Play R↻`, with
+> `Play R2` and `draw` at 0%. $\hat V$ −0.97, meaning the value head
+> expects a near-loss from this state. The policy is right that the
+> Reverse is the move (in 2-player UNO, Reverse acts as Skip).
 
-This is the moment I was most struck by what Claude could be useful for.
-Instead of guessing the next intervention, I asked Claude to do a
-literature review. *Specifically:* find what the PSRO + deep RL community
-recommends for BR initialization, opponent sampling within batches, and
-warm-start strategies, with citations and concrete actionable advice for
-my setup. What came back was Pipeline PSRO, Fusion-PSRO, NeuPL, Mixed
-Oracles, AlphaStar's PFSP. Papers I'd encountered in passing but hadn't
-traced through to the level of "and here is the three-line state_dict
-fusion that drops BR convergence time in half." Claude synthesized
-fifteen-ish papers into three changes I could implement in an afternoon:
+UNO has a lot of variance: one bad shuffle and the game ends before
+strategy matters. But iter_20 wins the majority of games against me
+on the quick variant. The first time I noticed it had stopped playing
+randomly was when it drew on its turn, looked at the new card, and
+immediately played a Red `+2` to deny my UNO. That kind of
+opportunistic "draw, see, attack" play wasn't there in iter_5.
 
-**1. Fusion init**: at iteration $k+1$, initialize the new BR's weights as
-the Nash-weighted average of the existing pool:
+### Splendor
 
-$$
-\theta_{\text{new}} = \sum_i \pi_i \cdot \theta_i
-$$
+![Splendor AI preview]({{ '/assets/uploads/2026-05-06T14-17-11-562Z__IMG_0089.jpeg' | relative_url }})
 
-where $\pi_i$ is the current Nash weight on pool member $i$ and $\theta_i$
-is its parameter vector. This averages the *behaviors* of the pool, giving
-the new BR a strong starting point that already plays competently against
-the meta.
+> Trained Splendor policy (iter 28, anchor-pool PSRO). 77% on
+> `Reserve L1 K`, 6% on `Reserve L2 K`, 5% on `Reserve L2 G`, plus a
+> long tail. $\hat V$ slightly negative. Note the small probability
+> annotations on individual market cards (`R 5%`, `R 6%`, `R 77%`)
+> coming from the rendered preview overlay.
 
-> *Intuition:* instead of starting the new policy from scratch (or from
-> a single hand-picked checkpoint), start it from a weighted blend of
-> the policies the equilibrium already cares about. You're handing the
-> BR a "consensus opening" instead of asking it to learn to walk before
-> it can run. It saves a lot of the inner-loop training budget that
-> would have been spent re-discovering the obvious.
+Splendor is the game where foresight is most readable in the policy's
+behavior. Strong play targets nobles to close out games and chains
+higher-tier card buys; weak play stockpiles gems without a plan. The
+trained policy reliably acquires nobles to win games, and across
+iterations its market preferences shift from indiscriminate Level-1
+grabbing to selective Level-2 / Level-3 reservations. It beats me
+consistently.
 
-**2. Prioritized fictitious self-play (PFSP)**: sample opponents during BR
-training proportional to
+### Backgammon
 
-$$
-w_i \propto \pi_i \cdot (1 - \text{wr}_i)^p
-$$
+![Backgammon AI preview]({{ '/assets/uploads/2026-05-06T14-15-19-002Z__IMG_0096.jpeg' | relative_url }})
 
-where $\text{wr}_i$ is the BR's rolling win-rate against opponent $i$.
-This focuses training on the opponents the BR is currently *losing* to,
-exactly where new exploitability lives.
+> Trained backgammon policy on a die-3 sub-move. Top suggestion is
+> `Commit 19 → 22 (die 3)` at $\hat V$ +0.67. The board overlay shows
+> per-destination probabilities: 38% on point 22 and 19, 31% on a
+> back-bar drop, 12% mid-board.
 
-> *Intuition:* think of sparring partners. The ones you can already
-> beat 95% of the time aren't making you better; the ones still beating
-> you are. PFSP biases the training schedule toward the opponents the
-> BR is actually struggling against, so every gradient step is fighting
-> someone who still has something to teach. Without it, training
-> rollouts get filled up with easy wins that don't move the needle.
+Backgammon is interesting because there's a strong textbook baseline:
+**pubeval**, the position-evaluation bot from the TD-Gammon era.
+Against me the trained policy wins consistently. Against pubeval, it
+plateaus around 50% win rate from a competent but unspecialized
+starting point, despite an extended fine-tune run; pubeval is just a
+strong heuristic and bridging the gap will take a different attack
+(better reward shaping, more training, or self-play against pubeval
+directly with PFSP). It's a solid game where I have a
+clear "harder external baseline still ahead of us" signal.
 
-**3. Value-head reuse**: carry forward the value head and shared backbone
-from the previous BR iteration. Re-initialize only the policy head. The
-value function generalizes across iterations because the underlying
-state-value structure of the game doesn't change just because the
-opponent mixture did.
+### Catan
 
-We implemented all three behind CLI flags, re-launched the same 20-iter
-PSRO run, and watched the plateau dissolve.
+![Catan AI preview]({{ '/assets/uploads/2026-05-06T14-15-18-653Z__IMG_0108.jpeg' | relative_url }})
 
-## The plot we cared about most
+> Trained Catan policy at setup phase. Top vertex pick: 26.6%
+> probability; 51 legal placements total. Each hex shows the policy's
+> marginal preference for nearby vertices, and yellow halos mark the
+> top picks. $\hat V$ +0.04.
 
-Here's what changed:
+Catan is the hardest game in the set, and the only one where the
+trained policy hasn't beaten me yet. Two things make it harder. It's
+**3-player**, which means the 2-player Nash solver doesn't apply; we
+use **α-rank** instead (a Markov-chain stationary distribution over
+the policy space) to compute the meta. And the hand-coded heuristics
+are good: the 10-anchor pool includes agents that chain "missing 1
+resource → maritime trade → build" and that successfully reach 10 VP
+in 3-player games where pure-greedy bots stall at 2 VP.
 
-![vs greedy]({{ '/assets/vs_greedy.png' | relative_url }})
+After 20 PSRO iterations, the trained best responses are still losing
+to several of those anchors outright. The α-rank weights end up almost
+entirely on the heuristic anchors, with the trained BRs sitting at the
+per-anchor floor. The negative result is informative: smart
+trade-to-build heuristics cover most of Catan's strategic surface
+already, and PPO from a BC start hasn't found a play style that
+strictly beats them yet.
 
-> **Each iteration's new policy played against the handcrafted greedy
-> baseline.** The grey line (baseline run) bounces around 0.5–1.0 with
-> high variance; most BRs only marginally beat greedy. The amber line
-> (Fusion+PFSP+VH) is consistently above 0.5, peaks at 1.0 multiple
-> times, and shows a clear pattern: every new BR is a meaningful
-> improvement over the cold-start oracle. The y-axis is win rate from a
-> single seat (the underlying game has a first-player advantage in UNO
-> so 0.5 is a neutral baseline).
-
-And the matrices the Nash solver eats, baseline on the left, Fusion on
-the right:
-
-![payoff matrices, baseline vs Fusion]({{ '/assets/payoff_matrix_compare.png' | relative_url }})
-
-> **Two 22×22 payoff matrices.** Each cell is the empirical win-rate of
-> policy *i* (row) playing as p1 against policy *j* (col) as p2,
-> averaged over 6 games. Greens are wins for the row player, reds are
-> losses. Amber crosshairs mark the policies the Nash solver chose to
-> weight in the final equilibrium. **Left (baseline):** the equilibrium
-> collapses onto just four early-iteration policies (`i5`, `i7`, `i9`,
-> `i12`); every iteration after iter 12 was wasted. The matrix has
-> noisier mid-band cells and no consistent dominance pattern.
-> **Right (Fusion+PFSP+VH):** the equilibrium spreads across *six*
-> policies, weighted toward later iterations (`i10`, `i14`, `i15`,
-> `i17`, `i18`, `i20`). The matrix is visibly cleaner; late-iter rows
-> show consistent green against early-iter columns, exactly the
-> "newer policies dominate older ones in expectation" pattern you want.
-> The right side is what the literature said Fusion-PSRO would deliver,
-> and the left is what truncated-BR PSRO does without it.
-
-## Looking inside one PSRO iteration
-
-Six summary signals during a single best-response training run (iter 10
-of the Fusion run):
+## Diagnostics from a single PSRO iter
 
 ![training diagnostics]({{ '/assets/training_diagnostics.png' | relative_url }})
 
-> **Left**: the value head's mean prediction $\hat V(s)$ tracks the
-> mean Monte-Carlo return reasonably well; they should be close if
-> the critic is fit. **Middle**: explained variance, $1 - \text{Var}(R - \hat V) / \text{Var}(R)$,
-> is a heartbeat for the critic. Above 0 means it's doing better than
-> just predicting the mean. Ours is around 0.1–0.2, which is "weak but
-> alive". Improving it more would help PPO advantages be cleaner.
-> **Right**: entropy (orange) shows the policy gradually sharpening as it
-> becomes more confident; gradient norm (green) is the size of each PPO
-> update, which stays bounded, no blow-ups, no early collapse. Together
-> these are the three "is the inner loop healthy?" plots.
-
-And the actual reward signal during that same iter:
+> Inner-loop training signals during one BR run. Left: value-head
+> prediction tracking the Monte-Carlo return. Middle: explained
+> variance ($1 - \text{Var}(R - \hat V) / \text{Var}(R)$), the
+> critic's heartbeat (positive means it's beating "always predict the
+> mean"). Right: entropy gradually sharpening as the policy gets more
+> confident, and gradient norm staying bounded.
 
 ![eval reward curve]({{ '/assets/eval_reward_curve.png' | relative_url }})
 
-> **Two flavors of reward telemetry.** The grey line is the noisy
-> per-step training reward; every PPO update reports the average reward
-> across the 16 parallel game rollouts that produced it. It's high
-> variance because rollouts are short and incomplete. The amber line is
-> the *eval* reward: every 20 BR steps, we play 16 *full* games against
-> the meta opponent and report the mean. Cleaner, less noisy. You can
-> see the policy improving across the iter even though the raw signal
-> looks like a chaotic mess.
+> Two flavors of reward telemetry. Grey line: noisy per-step training
+> reward across 16 parallel rollouts. Amber: cleaner eval reward from
+> 16 full games against the meta opponent every 20 BR steps. The
+> policy improving across the iter is visible in the eval line even
+> though the raw signal looks chaotic.
 
-## Playing iteration 20
+## Payoff matrices, per game
 
-Once the run finished, I did the only verification that actually
-satisfies me: I played games against the policy through the UI. Same
-interface I've been using to play the game from day one: click moves,
-opponent moves, see the score.
+Each cell is the empirical win-rate of policy *i* (row) playing as p1
+against policy *j* (col). Greens are wins for the row, reds are losses.
+Amber crosshairs mark the policies the meta solver weighted at >2% in
+the final equilibrium. Anchors are listed first along each axis;
+trained best responses (`i1`, `i2`, ...) follow.
 
-![UNO gameplay on mobile]({{ '/assets/gameplay_phone.png' | relative_url }})
+### UNO
 
-> **The actual play interface.** Same React UI that drove every other
-> experiment in the post: discard pile, draw pile, my hand visible,
-> opponent's count + score visible, click a card to play it or "AI Turn"
-> to let the trained policy move. The whole thing renders fine on a
-> phone, which turns out to matter (more on that below).
+![UNO payoff matrix]({{ '/assets/payoff_uno.png' | relative_url }})
 
-In the first game I played, the policy beat me 79–0, mostly off mid-game
-DrawTwo / Wild Draw Four combos and one late move where it drew on its
-turn, looked at the new card, and immediately played a Red DrawTwo to
-deny my UNO.
+> 26×26 matrix from the UNO quick-variant anchored PSRO run. Mass on
+> the meta is spread between the heuristic anchors and several late
+> trained iters; you can see the "newer trained iters dominate older
+> ones in expectation" pattern in the bottom-right block.
 
-That last beat is the move that convinced me the network is no longer
-just executing pattern-matched openings. It played opportunistically:
-"draw, see what I got, attack with it." None of the earlier iterations
-I'd played did that.
+### Splendor
 
-Across the earlier iters I played, the tactical sophistication rose
-visibly with iteration: cleanly-played but thin at the start, the first
-(often misused) WD4 challenges appearing mid-pool, and chains, DrawTwo /
-WD4 combos, and opportunistic UNO denials showing up in the late
-iterations.
+![Splendor payoff matrix]({{ '/assets/payoff_splendor.png' | relative_url }})
 
-### It's not strictly dominant
+> 36×36 matrix from the Splendor anchored PSRO run. The largest pool
+> in the post (more anchors, more iterations); the equilibrium spreads
+> across both anchors and trained BRs, and the trained policies
+> consistently beat earlier anchors.
 
-The policy doesn't always make the right call. In a separate game, it
-had a Wild Draw Four with a Yellow
-follow-up in hand; the right choice was to pick Yellow as the new color,
-because that would have set up its own next play. It picked Green
-instead, ended up unable to play after my response, and lost the game it
-otherwise could have closed. Picking the wrong color after a wild is
-exactly the kind of one-step look-ahead failure that PPO's value head
-should be able to catch but evidently doesn't reliably.
+### Backgammon
 
-So the honest summary is: against my level of play, iter_20 wins more
-often than not, but not by overwhelming margin and not on every game. It
-makes mistakes I can read and exploit when I'm paying attention. The
-gain over iter_1 isn't "AI is now superhuman at UNO". It's "AI is now
-playing well enough that I have to actually pay attention." That's the
-bar I cared about, and I'm willing to call it cleared, but it's not a
-domination story.
+![Backgammon payoff matrix]({{ '/assets/payoff_backgammon.png' | relative_url }})
+
+> 28×28 matrix from the backgammon anchor-pool run. Fewer policies in
+> the equilibrium because backgammon's variance per game is higher and
+> several anchors dominate late-iter trained BRs at this training
+> budget.
+
+### Catan
+
+![Catan payoff matrix]({{ '/assets/payoff_catan.png' | relative_url }})
+
+> 19×19 matrix from the 3-player Catan run with α-rank as the meta
+> solver. The cell at $(i,j)$ is row *i*'s average per-game credit
+> when seated against column *j* (rotated through all three seats per
+> cell). Almost the entire α-rank weight ends up on the heuristic
+> anchors; trained best responses sit at the per-anchor floor. This
+> is the matrix that visually says "the heuristics are still the
+> right answer here."
 
 ## A note on how this got made
 
 I want to flag something about the workflow, because it's not the
 typical "deep learning research project" picture.
 
-![Driving from the phone]({{ '/assets/claude_phone.png' | relative_url }})
+![Driving from the phone]({{ '/assets/uploads/2026-05-06T14-44-44-841Z__IMG_0091.jpeg' | relative_url }})
 
-> **The actual driver's seat.** A Claude.ai conversation on my phone,
-> mid-experiment, reading the literature-review reply that turned into
-> the Fusion+PFSP+VH-reuse fix. The text-input bar at the bottom is the
-> instrument; the long-running Python process on my desktop GPU is the
-> thing being instrumented.
+> **The actual driver's seat.** A Claude session on my phone, mid-build,
+> scoping the work to add backgammon to the engine. My one-line ask
+> ("implement Backgammon, run a 20-iter PSRO, research a set of
+> challenging anchors") gets a proper scope estimate back before any
+> hours of GPU time get burned. The text-input bar at the bottom is
+> the instrument; the long-running Python process on my desktop GPU
+> is the thing being instrumented.
 
 Almost none of this was done at my computer. The first few sessions
 (where the engine got built and the framework took shape) were at a
@@ -516,45 +401,11 @@ errands. Claude Max subscription so the assistant never times out
 mid-execution, my GPU desktop at home running the long jobs, a local
 server I could SSH into from anywhere.
 
-The pattern that emerged: I'd send a message describing the next
-experiment ("kick off a 20-iter PSRO run with these knobs, save it
-under uno-quick-ppo, and report back when iter 12 lands"), Claude would
-spin up the background job, schedule a wakeup for when the next milestone
-should hit, and notify me. Between rest periods I'd read the latest
-diagnostics screenshot, decide what to do next, fire off the next
-instruction. The whole training pipeline above (Fusion init, PFSP, the
-literature review, the BC pipeline) was driven from a phone in
-fragments measured in single-digit minutes.
-
-The deeper reason I leaned into this workflow: AI is fast becoming
-central to what most of us do for a living, and I wanted to push
+AI is fast becoming central to what most of us do for a living, and I wanted to push
 myself to use it in modes I hadn't before. Agentic background jobs.
 Long-running collaborations from a phone. Lit reviews that translate
 directly into code changes. A hobby project I actually cared about
 turned out to be the right place to practice.
-
-## A note on the playtest workflow
-
-Two kinds of "human" played against the trained policies in this
-project, and both ended up mattering:
-
-- **Claude played.** During agentic sessions, Claude sat opposite the
-  trained policy, read each state, reasoned out a move, and submitted
-  it through the same `POST /api/games/:id/move` endpoint a UI click
-  would. LLM on one side, PPO policy on the other, same engine
-  refereeing. The challenges Claude raised mid-game ("that WD4 wasn't
-  legal, the previous color was Red and you held a Red") were better
-  than any unit test at surfacing engine bugs.
-- **I played.** Same UI, but with me clicking cards on a phone during
-  spare moments. Slower, more emotional, with the actual human stakes
-  of "you're at one card, what do you do?" that's hard to simulate.
-
-The modes are complementary. Claude's sessions catch anything
-mechanically wrong fast: wrong move list, illegal action accepted,
-score off by one, because the LLM is patient and methodical. My
-sessions catch whether the policy is *interesting to play against*:
-whether it bluffs, sets up, mistimes its WD4, denies an opponent's
-UNO. Bugs vs. vibes. Both required, neither sufficient on its own.
 
 ## Where this leaves me
 
@@ -563,23 +414,26 @@ this is the part that doesn't fit into any single AI-assistant talking
 point) is how much of the work was *me directing the experiment* and
 *Claude executing the things I'd usually defer*. The big choices have
 been mine: what to build, what to investigate, what failure modes to
-chase, when to stop chasing them. The keystrokes have largely been
-Claude's. We co-debugged engine bugs (the WD4 challenge handler not
-clearing `pendingDraw` was one Claude found by reading my session
-recording). We co-designed the dataset manager. We co-played a recorded
-self-play game where I made decisions turn-by-turn and Claude transcribed
-them through the API.
+chase, when to stop chasing them. The keystrokes have entirely been
+Claude's. We co-debugged engine bugs, co-designed the dataset manager,
+co-played recorded self-play games where I made decisions turn-by-turn
+and Claude transcribed them through the API.
 
-The bar I set at the start was: can these trained policies match or beat
-the careful play that I bring to the table? After playing several games
-against iter_20 (winning some, losing more), the answer is something
-like "yes, in expectation, on the quick UNO variant, against my play
-this particular weekend." That's neither a final answer nor a benchmark
-number, because the bar is also moving; playing another fifty games
-would teach me new patterns, which would change what a "human-equivalent"
-policy needs to handle. But it's the answer I trust most, because it's
-the one I got the only way I trust to know things: by playing the
-result.
+The bar I set at the start was: can these trained policies match or
+beat the careful play I bring to the table? After playing several games
+against each policy, the answer is "yes" for UNO, Splendor, and
+Backgammon, and "not yet" for Catan. The two real frontiers right now
+are pubeval in backgammon (a strong textbook baseline that the trained
+policy plateaus against) and the heuristic anchor pool in 3-player
+Catan (where smart trade-to-build heuristics still beat the trained
+best responses).
+
+## Future work
+
+A few directions I want to explore from here:
+
+- **Pretrained reasoning models as the policy.**
+- **Algorithms beyond PPO for the inner-loop fine-tune.**.
 
 ## References
 
